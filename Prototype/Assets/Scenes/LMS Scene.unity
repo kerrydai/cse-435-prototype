@@ -1072,7 +1072,7 @@ MonoBehaviour:
   swerveHoldTime: 0.5
   carBody: {fileID: 0}
   tiltAngle: 0.5
-  tiltSpeed: 4
+  tiltSpeed: 3
 --- !u!4 &1363607696 stripped
 Transform:
   m_CorrespondingSourceObject: {fileID: 842716771781650923, guid: 9af841740f29f4370955cced523c80b5, type: 3}
