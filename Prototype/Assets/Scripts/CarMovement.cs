@@ -1,90 +1,146 @@
 using UnityEngine;
-using System.Collections;
+using TMPro;
+using UnityEngine.InputSystem;
 
 public class CarMovement : MonoBehaviour
 {
-    [Header("Lane Movement Settings")]
-    public float speed = 10f;              // Forward speed
-    public float swerveAmount = 1.5f;      // How far to swerve from center
-    public float swerveSpeed = 2f;         // How fast it swerves
-    public float timeBetweenSwerves = 3f;  // Time before next random swerve
-    public float swerveHoldTime = 0.5f;    // How long to hold before returning
+    [Header("Movement")]
+    public float forwardSpeed = 10f;
+    public float turnSpeed = 3f;
+    public float autoCenterStrength = 5f;
 
-    [Header("Visual Tilt Settings")]
-    public Transform carBody;              // Assign in Inspector (child mesh)
-    public float tiltAngle = 15f;          // Max tilt angle when steering
-    public float tiltSpeed = 4f;           // How fast tilt adjusts
+    [Header("Lane References")]
+    public Transform laneParent;
+    public float laneThreshold = 1.5f;
 
-    private Vector3 centerPos;             // Starting (middle lane) position
-    private float targetOffset = 0f;       // Lateral offset (x) from center
-    private bool isSwerving = false;
-    private float nextSwerveTime;
-    private float currentTilt = 0f;
+    [Header("UI")]
+    public TMP_Text laneStatusText;
+
+    private Transform[] lanePoints;
+    private Transform closestLanePoint;
+    private float currentSidewaysDistance;
 
     void Start()
     {
-        centerPos = transform.position;
-        nextSwerveTime = Time.time + Random.Range(1f, timeBetweenSwerves);
+        if (laneParent != null)
+        {
+            lanePoints = new Transform[laneParent.childCount];
+            for (int i = 0; i < laneParent.childCount; i++)
+                lanePoints[i] = laneParent.GetChild(i);
+        }
+        else
+        {
+            lanePoints = new Transform[0];
+        }
     }
 
     void Update()
     {
-        // Move forward in local space so turning affects direction
-        transform.Translate(Vector3.forward * speed * Time.deltaTime, Space.Self);
+        MoveForward();
+        TurnWithMouse();
 
-        // Handle random swerve
-        if (!isSwerving && Time.time >= nextSwerveTime)
+        closestLanePoint = GetClosestLanePoint();
+
+        AutoCenterToLane();
+        UpdateLaneStatusText();
+    }
+
+    void MoveForward()
+    {
+        transform.Translate(Vector3.forward * forwardSpeed * Time.deltaTime);
+    }
+
+    void TurnWithMouse()
+    {
+        if (Mouse.current == null) return;
+
+        float mouseX = Mouse.current.delta.x.ReadValue();
+        float turn = mouseX * turnSpeed * Time.deltaTime;
+
+        transform.Rotate(0, turn, 0);
+    }
+
+    Transform GetClosestLanePoint()
+    {
+        if (lanePoints == null || lanePoints.Length == 0)
+            return null;
+
+        float best = Mathf.Infinity;
+        Transform bestPoint = null;
+
+        foreach (var p in lanePoints)
         {
-            StartCoroutine(DoRandomSwerve());
-            nextSwerveTime = Time.time + timeBetweenSwerves;
+            if (p == null) continue;
+
+            float d = Vector3.Distance(transform.position, p.position);
+
+            if (d < best)
+            {
+                best = d;
+                bestPoint = p;
+            }
         }
 
-        // Smoothly move toward the target lateral offset
-        Vector3 pos = transform.position;
-        float newX = Mathf.Lerp(pos.x, centerPos.x + targetOffset, Time.deltaTime * swerveSpeed);
-        transform.position = new Vector3(newX, pos.y, pos.z);
+        return bestPoint;
+    }
 
-        // Smooth tilt visual only (not whole car direction)
-        float targetTilt = Mathf.Lerp(currentTilt, (targetOffset > 0 ? -tiltAngle : (targetOffset < 0 ? tiltAngle : 0)), Time.deltaTime * tiltSpeed);
-        currentTilt = targetTilt;
-        if (carBody != null)
+    void AutoCenterToLane()
+    {
+        if (closestLanePoint == null)
+            return;
+
+        Vector3 offsetWorld = closestLanePoint.position - transform.position;
+        float sideways = Vector3.Dot(offsetWorld, transform.right);
+        currentSidewaysDistance = Mathf.Abs(sideways);
+
+        // Smooth steering toward center
+        if (currentSidewaysDistance > laneThreshold * 0.35f) // start adjusting a bit early
         {
-            carBody.localRotation = Quaternion.Euler(0f, 0f, targetTilt);
+            Vector3 targetDirection = closestLanePoint.position - transform.position;
+            targetDirection.y = 0; // keep rotation horizontal
+
+            Quaternion targetRotation = Quaternion.LookRotation(targetDirection, Vector3.up);
+
+            // Smooth, slower rotation
+            float smoothSpeed = autoCenterStrength * 0.2f; // reduce turning speed
+            transform.rotation = Quaternion.Slerp(transform.rotation, targetRotation, smoothSpeed * Time.deltaTime);
         }
     }
 
-    private IEnumerator DoRandomSwerve()
+
+    void UpdateLaneStatusText()
     {
-        isSwerving = true;
+        if (laneStatusText == null) return;
 
-        // Choose direction
-        float direction = Random.value < 0.5f ? -1f : 1f;
-        targetOffset = direction * swerveAmount;
+        float d = currentSidewaysDistance;
 
-        // Slightly rotate the car in that direction to simulate steering
-        Quaternion startRot = transform.rotation;
-        Quaternion targetRot = Quaternion.Euler(0f, direction * 10f, 0f);
-        float t = 0f;
-        while (t < 1f)
+        if (d < laneThreshold * 0.35f)
+            laneStatusText.text = "<color=green>LDWS: Ready</color>";
+        else if (d < laneThreshold)
+            laneStatusText.text = "<color=yellow>LDWS: Lane Approach Warning</color>";
+        else
+            laneStatusText.text = "<color=red>LDWS: Lane Departure Warning!</color>";
+    }
+
+    private void OnDrawGizmos()
+    {
+        if (!Application.isPlaying) return;
+
+        if (closestLanePoint != null)
         {
-            t += Time.deltaTime * swerveSpeed;
-            transform.rotation = Quaternion.Lerp(startRot, targetRot, t);
-            yield return null;
+            Gizmos.color = Color.red;
+            Gizmos.DrawSphere(closestLanePoint.position, 0.25f);
+            Gizmos.DrawLine(transform.position, closestLanePoint.position);
         }
 
-        // Hold the swerve
-        yield return new WaitForSeconds(swerveHoldTime);
-
-        // Return to center
-        targetOffset = 0f;
-        t = 0f;
-        while (t < 1f)
+        if (lanePoints != null)
         {
-            t += Time.deltaTime * swerveSpeed;
-            transform.rotation = Quaternion.Lerp(targetRot, startRot, t);
-            yield return null;
+            Gizmos.color = Color.green;
+            foreach (var p in lanePoints)
+            {
+                if (p != null)
+                    Gizmos.DrawSphere(p.position, 0.12f);
+            }
         }
-
-        isSwerving = false;
     }
 }
